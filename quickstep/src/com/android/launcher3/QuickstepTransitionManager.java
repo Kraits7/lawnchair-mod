@@ -658,44 +658,52 @@ public class QuickstepTransitionManager implements OnDeviceProfileChangeListener
      * @return Animator that controls the window of the opening targets from app
      *         icons.
      */
-    private Animator getOpeningWindowAnimators(View v,
-            RemoteAnimationTarget[] appTargets,
-            RemoteAnimationTarget[] wallpaperTargets,
-            RemoteAnimationTarget[] nonAppTargets,
-            boolean launcherClosing) {
-        int rotationChange = getRotationChange(appTargets);
-        Rect windowTargetBounds = getWindowTargetBounds(appTargets, rotationChange);
-        boolean appTargetsAreTranslucent = areAllTargetsTranslucent(appTargets);
+    private Animator getOpeningWindowAnimators(View v, RemoteAnimationTarget[] targets, 
+                                           RemoteAnimationTarget[] wallpaperTargets, 
+                                           RemoteAnimationTarget[] nonAppTargets, 
+                                           boolean launcherClosing) {
+    // Создаем объект транзакции для управления поверхностями окон
+    SyncRtSurfaceTransactionApplier applier = new SyncRtSurfaceTransactionApplier(v);
+    
+    // Определяем начальную и конечную геометрию (от иконки до полного экрана)
+    RectF iconBounds = new RectF();
+    FloatingIconView.getIconBounds(v, iconBounds);
+    
+    RectF windowBounds = new RectF(0, 0, mDeviceProfile.widthPx, mDeviceProfile.heightPx);
+    
+    // Ключевой объект: SpringAnimation для прямоугольника (RectF)
+    // Вместо ValueAnimator.ofFloat(0, 1)
+    RectFSpringAnim springAnim = new RectFSpringAnim(iconBounds, windowBounds, mContext, mDeviceProfile);
+    
+    // Настройка параметров пружины (iOS-style)
+    // STIFFNESS_MEDIUM_LOW (ок. 400) и DAMPING_RATIO_LOW_BOUNCY (0.75)
+    springAnim.setStiffness(SpringForce.STIFFNESS_MEDIUM_LOW);
+    springAnim.setDampingRatio(SpringForce.DAMPING_RATIO_LOW_BOUNCY);
 
-        RectF launcherIconBounds = new RectF();
-        FloatingIconView floatingView = getFloatingIconView(mLauncher, v,
-                (mLauncher.getTaskbarUIController() == null || !isTransientTaskbar(mLauncher))
-                        ? null
-                        : mLauncher.getTaskbarUIController().findMatchingView(v),
-                null /* fadeOutView */, !appTargetsAreTranslucent, launcherIconBounds,
-                true /* isOpening */);
-        Rect crop = new Rect();
-        Matrix matrix = new Matrix();
+    // Слушатель каждого кадра анимации
+    springAnim.addOnUpdateListener((spec, progress) -> {
+        SurfaceTransaction transaction = new SurfaceTransaction();
+        for (RemoteAnimationTarget target : targets) {
+            if (target.mode == MODE_OPENING) {
+                // Рассчитываем матрицу трансформации на основе текущего прогресса пружины
+                Matrix m = new Matrix();
+                float scale = spec.width() / windowBounds.width();
+                m.setScale(scale, scale);
+                m.postTranslate(spec.left, spec.top);
+                
+                transaction.forSurface(target.leash)
+                    .setMatrix(m)
+                    .setAlpha(1.0f) // В iOS окно почти сразу непрозрачное
+                    .setCornerRadius(getCornerRadius(progress)); 
+                }
+            }
+            applier.scheduleApply(transaction);
+        });
 
-        RemoteAnimationTargets openingTargets = new RemoteAnimationTargets(appTargets,
-                wallpaperTargets, nonAppTargets, MODE_OPENING);
-        SurfaceTransactionApplier surfaceApplier = new SurfaceTransactionApplier(floatingView);
-        openingTargets.addReleaseCheck(surfaceApplier);
-        RemoteAnimationTarget navBarTarget = openingTargets.getNavBarRemoteAnimationTarget();
-
-        int[] dragLayerBounds = new int[2];
-        mDragLayer.getLocationOnScreen(dragLayerBounds);
-
-        final boolean hasSplashScreen;
-        if (supportsSSplashScreen()) {
-            int taskId = openingTargets.getFirstAppTargetTaskId();
-            Pair<Integer, Integer> defaultParams = Pair.create(STARTING_WINDOW_TYPE_NONE, 0);
-            Pair<Integer, Integer> taskParams = mTaskStartParams.getOrDefault(taskId, defaultParams);
-            mTaskStartParams.remove(taskId);
-            hasSplashScreen = taskParams.first == STARTING_WINDOW_TYPE_SPLASH_SCREEN;
-        } else {
-            hasSplashScreen = false;
-        }
+    // Этот метод возвращает стандартный Animator-интерфейс, 
+    // чтобы остальной код Launcher3 не сломался
+        return springAnim.toValueAnimator();
+    }
 
         AnimOpenProperties prop = new AnimOpenProperties(mLauncher.getResources(), mDeviceProfile,
                 windowTargetBounds, launcherIconBounds, v, dragLayerBounds[0], dragLayerBounds[1],
