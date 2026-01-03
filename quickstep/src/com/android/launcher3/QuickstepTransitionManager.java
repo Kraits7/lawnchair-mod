@@ -658,50 +658,43 @@ public class QuickstepTransitionManager implements OnDeviceProfileChangeListener
      * @return Animator that controls the window of the opening targets from app
      *         icons.
      */
-    private Animator getOpeningWindowAnimators(View v, RemoteAnimationTarget[] targets, 
-                                           RemoteAnimationTarget[] wallpaperTargets, 
-                                           RemoteAnimationTarget[] nonAppTargets, 
-                                           boolean launcherClosing) {
-    // Создаем объект транзакции для управления поверхностями окон
-    SyncRtSurfaceTransactionApplier applier = new SyncRtSurfaceTransactionApplier(v);
+    // Пример модификации метода getOpeningWindowAnimators в QuickstepTransitionManager.java
+    private Animator getOpeningWindowAnimators(View v, RemoteAnimationTarget[] targets, ...) {
+        // 1. Инициализируем SurfaceApplier для прямого управления слоями окон
+        SurfaceTransactionApplier surfaceApplier = new SurfaceTransactionApplier(v);
     
-    // Определяем начальную и конечную геометрию (от иконки до полного экрана)
-    RectF iconBounds = new RectF();
-    FloatingIconView.getIconBounds(v, iconBounds);
+        // 2. Определяем начальную (иконка) и конечную (экран) геометрию
+        RectF iconBounds = new RectF();
+        FloatingIconView.getIconBounds(v, iconBounds);
+        RectF windowBounds = new RectF(0, 0, mDeviceProfile.widthPx, mDeviceProfile.heightPx);
     
-    RectF windowBounds = new RectF(0, 0, mDeviceProfile.widthPx, mDeviceProfile.heightPx);
+        // 3. Создаем пружинную анимацию
+        RectFSpringAnim springAnim = new RectFSpringAnim(iconBounds, windowBounds, mLauncher, mDeviceProfile);
     
-    // Ключевой объект: SpringAnimation для прямоугольника (RectF)
-    // Вместо ValueAnimator.ofFloat(0, 1)
-    RectFSpringAnim springAnim = new RectFSpringAnim(iconBounds, windowBounds, mContext, mDeviceProfile);
+        // Параметры для эффекта iOS: умеренная жесткость и мягкий отскок
+        springAnim.setStiffness(SpringForce.STIFFNESS_MEDIUM_LOW); // ~400
+        springAnim.setDampingRatio(SpringForce.DAMPING_RATIO_LOW_BOUNCY); // 0.75
     
-    // Настройка параметров пружины (iOS-style)
-    // STIFFNESS_MEDIUM_LOW (ок. 400) и DAMPING_RATIO_LOW_BOUNCY (0.75)
-    springAnim.setStiffness(SpringForce.STIFFNESS_MEDIUM_LOW);
-    springAnim.setDampingRatio(SpringForce.DAMPING_RATIO_LOW_BOUNCY);
-
-    // Слушатель каждого кадра анимации
-    springAnim.addOnUpdateListener((spec, progress) -> {
-        SurfaceTransaction transaction = new SurfaceTransaction();
-        for (RemoteAnimationTarget target : targets) {
-            if (target.mode == MODE_OPENING) {
-                // Рассчитываем матрицу трансформации на основе текущего прогресса пружины
-                Matrix m = new Matrix();
-                float scale = spec.width() / windowBounds.width();
-                m.setScale(scale, scale);
-                m.postTranslate(spec.left, spec.top);
-                
-                transaction.forSurface(target.leash)
-                    .setMatrix(m)
-                    .setAlpha(1.0f) // В iOS окно почти сразу непрозрачное
-                    .setCornerRadius(getCornerRadius(progress)); 
+        // 4. Слушатель обновлений (каждый кадр)
+        springAnim.addOnUpdateListener((spec, progress) -> {
+            SurfaceTransaction transaction = new SurfaceTransaction();
+            for (RemoteAnimationTarget target : targets) {
+                if (target.mode == MODE_OPENING) {
+                    // Динамический расчет матрицы на основе текущего положения пружины
+                    float scale = spec.width() / windowBounds.width();
+                    mMatrix.setScale(scale, scale);
+                    mMatrix.postTranslate(spec.left, spec.top);
+    
+                    transaction.forSurface(target.leash)
+                        .setMatrix(mMatrix)
+                        .setAlpha(1.0f) // В iOS окно становится видимым мгновенно
+                        .setCornerRadius(getCornerRadius(progress)); 
                 }
             }
-            applier.scheduleApply(transaction);
+            surfaceApplier.scheduleApply(transaction);
         });
-
-    // Этот метод возвращает стандартный Animator-интерфейс, 
-    // чтобы остальной код Launcher3 не сломался
+    
+        // Возвращаем Animator для совместимости с системой Launcher3
         return springAnim.toValueAnimator();
     }
 
