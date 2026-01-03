@@ -403,35 +403,48 @@ public class QuickstepTransitionManager implements OnDeviceProfileChangeListener
      * @param appTargets      the list of opening/closing apps
      * @param launcherClosing true if launcher is closing
      */
-    private void composeIconLaunchAnimator(@NonNull AnimatorSet anim, @NonNull View v,
-            @NonNull RemoteAnimationTarget[] appTargets,
-            @NonNull RemoteAnimationTarget[] wallpaperTargets,
-            @NonNull RemoteAnimationTarget[] nonAppTargets,
+    private Animator getOpeningWindowAnimators(View v, RemoteAnimationTarget[] appTargets,
+            RemoteAnimationTarget[] wallpaperTargets, RemoteAnimationTarget[] nonAppTargets,
             boolean launcherClosing) {
-        // Set the state animation first so that any state listeners are called
-        // before our internal listeners.
-        mLauncher.getStateManager().setCurrentAnimation(anim);
-
-        // Note: the targetBounds are relative to the launcher
-        int startDelay = getSingleFrameMs(mLauncher);
-        Animator windowAnimator = getOpeningWindowAnimators(
-                v, appTargets, wallpaperTargets, nonAppTargets, launcherClosing);
-        windowAnimator.setStartDelay(startDelay);
-        anim.play(windowAnimator);
-        if (launcherClosing) {
-            // Delay animation by a frame to avoid jank.
-            Pair<AnimatorSet, Runnable> launcherContentAnimator = getLauncherContentAnimator(true /* isAppOpening */,
-                    startDelay, false);
-            anim.play(launcherContentAnimator.first);
-            anim.addListener(new AnimatorListenerAdapter() {
-                @Override
-                public void onAnimationEnd(Animator animation) {
-                    launcherContentAnimator.second.run();
+        
+        // 1. Координаты иконки и конечного окна
+        RectF iconBounds = new RectF();
+        FloatingIconView.getIconBounds(v, iconBounds);
+        RectF windowBounds = new RectF(0, 0, mDeviceProfile.widthPx, mDeviceProfile.heightPx);
+    
+        // 2. Создаем пружину вместо обычного таймера
+        // Это сердце динамической анимации
+        RectFSpringAnim springAnim = new RectFSpringAnim(iconBounds, windowBounds, mContext, mDeviceProfile);
+        
+        // 3. Настройка "физики iOS"
+        // Stiffness (Жесткость): 500-600 дает быстрый, но мягкий старт
+        // Damping (Упругость): 0.8f дает тот самый легкий "кисельный" отскок
+        springAnim.setStiffness(550f);
+        springAnim.setDampingRatio(0.8f);
+    
+        // 4. Добавляем обработчик каждого кадра
+        springAnim.addOnUpdateListener((spec, progress) -> {
+            SurfaceTransaction transaction = new SurfaceTransaction();
+            for (RemoteAnimationTarget target : appTargets) {
+                if (target.mode == MODE_OPENING) {
+                    // Рассчитываем масштаб и положение окна динамически
+                    float scale = spec.width() / windowBounds.width();
+                    mMatrix.setScale(scale, scale);
+                    mMatrix.postTranslate(spec.left, spec.top);
+    
+                    transaction.forSurface(target.leash)
+                        .setMatrix(mMatrix)
+                        .setAlpha(1.0f) // В iOS окно сразу непрозрачное
+                        .setCornerRadius(getCornerRadius(progress));
                 }
-            });
-        }
+            }
+            mSurfaceApplier.scheduleApply(transaction);
+        });
+    
+        // 5. Превращаем пружину в Animator, чтобы Launcher3 не выдал ошибку
+        return springAnim.toValueAnimator();
     }
-
+    
     private void composeWidgetLaunchAnimator(
             @NonNull AnimatorSet anim,
             @NonNull LauncherAppWidgetHostView v,
@@ -713,8 +726,13 @@ public class QuickstepTransitionManager implements OnDeviceProfileChangeListener
         Point tmpPos = new Point();
 
         AnimatorSet animatorSet = new AnimatorSet();
-        ValueAnimator appAnimator = ValueAnimator.ofFloat(0, 1);
-        appAnimator.setDuration(APP_LAUNCH_DURATION);
+        RectFSpringAnim springAnim = new RectFSpringAnim(startRect, targetRect, mContext, mDeviceProfile);
+        // Задаем физику iOS (плавность и инерция)
+        springAnim.setStiffness(SpringForce.STIFFNESS_MEDIUM_LOW);
+        springAnim.setDampingRatio(SpringForce.DAMPING_RATIO_LOW_BOUNCY);
+        
+        // Теперь аниматор будет работать на базе пружины
+        ValueAnimator appAnimator = springAnim.toValueAnimator();
         appAnimator.setInterpolator(LINEAR);
         appAnimator.addListener(floatingView);
         appAnimator.addListener(new AnimatorListenerAdapter() {
@@ -962,8 +980,10 @@ public class QuickstepTransitionManager implements OnDeviceProfileChangeListener
 
         AnimatorSet animatorSet = new AnimatorSet();
         ValueAnimator appAnimator = ValueAnimator.ofFloat(0, 1);
-        appAnimator.setDuration(APP_LAUNCH_DURATION);
-        appAnimator.setInterpolator(LINEAR);
+        // Новый стиль: физика
+        RectFSpringAnim springAnim = new RectFSpringAnim(startRect, targetRect, mContext, mDeviceProfile);
+        springAnim.setStiffness(500f); // Жесткость (как в iOS)
+        springAnim.setDampingRatio(0.8f); // Упругость (чтобы не было лишней тряски)
         appAnimator.addListener(floatingView);
         appAnimator.addListener(new AnimatorListenerAdapter() {
             @Override
